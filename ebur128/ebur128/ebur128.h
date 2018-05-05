@@ -14,7 +14,7 @@ extern "C" {
 
 #define EBUR128_VERSION_MAJOR 1
 #define EBUR128_VERSION_MINOR 2
-#define EBUR128_VERSION_PATCH 2
+#define EBUR128_VERSION_PATCH 4
 
 #include <stddef.h>       /* for size_t */
 
@@ -24,16 +24,16 @@ extern "C" {
  */
 enum channel {
   EBUR128_UNUSED = 0,     /**< unused channel (for example LFE channel) */
-  EBUR128_LEFT,
-  EBUR128_Mp030 = 1,      /**< itu M+030 */
-  EBUR128_RIGHT,
-  EBUR128_Mm030 = 2,      /**< itu M-030 */
-  EBUR128_CENTER,
-  EBUR128_Mp000 = 3,      /**< itu M+000 */
-  EBUR128_LEFT_SURROUND,
-  EBUR128_Mp110 = 4,      /**< itu M+110 */
-  EBUR128_RIGHT_SURROUND,
-  EBUR128_Mm110 = 5,      /**< itu M-110 */
+  EBUR128_LEFT   = 1,
+  EBUR128_Mp030  = 1,     /**< itu M+030 */
+  EBUR128_RIGHT  = 2,
+  EBUR128_Mm030  = 2,     /**< itu M-030 */
+  EBUR128_CENTER = 3,
+  EBUR128_Mp000  = 3,     /**< itu M+000 */
+  EBUR128_LEFT_SURROUND  = 4,
+  EBUR128_Mp110  = 4,     /**< itu M+110 */
+  EBUR128_RIGHT_SURROUND = 5,
+  EBUR128_Mm110  = 5,     /**< itu M-110 */
   EBUR128_DUAL_MONO,      /**< a channel that is counted twice */
   EBUR128_MpSC,           /**< itu M+SC */
   EBUR128_MmSC,           /**< itu M-SC */
@@ -122,7 +122,7 @@ void ebur128_get_version(int* major, int* minor, int* patch);
  *  @param channels the number of channels.
  *  @param samplerate the sample rate.
  *  @param mode see the mode enum for possible values.
- *  @return an initialized library state.
+ *  @return an initialized library state, or NULL on error.
  */
 ebur128_state* ebur128_init(unsigned int channels,
                             unsigned long samplerate,

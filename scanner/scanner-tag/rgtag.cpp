@@ -9,16 +9,10 @@
 #include <xiphcomment.h>
 #include <apetag.h>
 
-#if TAGLIB_MINOR_VERSION >= 9
-#define HAS_OPUS_SUPPORT
-#endif
-
 #include <mpegfile.h>
 #include <flacfile.h>
 #include <oggfile.h>
-#ifdef HAS_OPUS_SUPPORT
 #include <opusfile.h>
-#endif
 #include <vorbisfile.h>
 #include <mpcfile.h>
 #include <wavpackfile.h>
@@ -28,8 +22,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
-#include <sstream>
+#include <iomanip>
 #include <ios>
+#include <sstream>
 
 #ifdef _WIN32
 #define CAST_FILENAME (const wchar_t *)
@@ -37,7 +32,7 @@
 #define CAST_FILENAME
 #endif
 
-float parse_string_to_float(std::string const& s, bool string_dummy = false) {
+static float parse_string_to_float(std::string const& s, bool string_dummy = false) {
   std::stringstream ss;
   ss << s;
   if (string_dummy) {
@@ -201,45 +196,170 @@ get_ogg_file(const char* filename, const char* extension) {
           new TagLib::Ogg::Vorbis::File(CAST_FILENAME filename);
     xiph = f->tag();
     file = f;
-#ifdef HAS_OPUS_SUPPORT
   } else if (!std::strcmp(extension, "opus")) {
     TagLib::Ogg::Opus::File* f =
           new TagLib::Ogg::Opus::File(CAST_FILENAME filename);
     xiph = f->tag();
     file = f;
-#endif
   }
   return std::make_pair(file, xiph);
+}
+
+static int16_t to_opus_gain(double gain) {
+  gain = 256 * gain + 0.5;
+  return gain < -32768
+             ? -32768
+             : gain < 32767 ? static_cast<int16_t>(floor(gain)) : 32767;
+}
+
+static void adjust_gain_data(struct gain_data *gd, double opus_correction_db) {
+  gd->album_gain += opus_correction_db;
+  gd->track_gain += opus_correction_db;
+  if (gd->album_peak > 0.0) {
+    gd->album_peak = std::pow(
+        10.0, ((20 * log10(gd->album_peak)) - opus_correction_db) / 20.0);
+  }
+  if (gd->track_peak > 0.0) {
+    gd->track_peak = std::pow(
+        10.0, ((20 * log10(gd->track_peak)) - opus_correction_db) / 20.0);
+  }
+}
+
+static double clamp_rg(double x) {
+  if (x < -51.0) return -51.0;
+  else if (x > 51.0) return 51.0;
+  else return x;
+}
+
+void clamp_gain_data(struct gain_data* gd) {
+  gd->album_gain = clamp_rg(gd->album_gain);
+  gd->track_gain = clamp_rg(gd->track_gain);
+}
+
+void adjust_with_file_gain(struct gain_data* gd,
+                           const char* filename,
+                           const char* extension) {
+  if (!std::strcmp(extension, "opus")) {
+    std::pair<TagLib::File*, TagLib::Ogg::XiphComment*> p
+        = get_ogg_file(filename, extension);
+    if (!p.first->isValid()) {
+      delete p.first;
+      return;
+    }
+    TagLib::ByteVector header =
+        static_cast<TagLib::Ogg::Opus::File *>(p.first)->packet(0);
+    double opus_header_gain_current = header.toShort(16, false) / 256.0;
+    adjust_gain_data(gd, opus_header_gain_current);
+    delete p.first;
+  }
 }
 
 static bool tag_vorbis_comment(const char* filename,
                                const char* extension,
                                struct gain_data* gd,
-                               struct gain_data_strings* gds) {
+                               struct gain_data_strings* gds,
+                               bool opus_compat) {
   std::pair<TagLib::File*, TagLib::Ogg::XiphComment*> p
       = get_ogg_file(filename, extension);
 
-  p.second->addField("REPLAYGAIN_TRACK_GAIN", gds->track_gain);
-  p.second->addField("REPLAYGAIN_TRACK_PEAK", gds->track_peak);
-  if (gd->album_mode) {
-    p.second->addField("REPLAYGAIN_ALBUM_GAIN", gds->album_gain);
-    p.second->addField("REPLAYGAIN_ALBUM_PEAK", gds->album_peak);
-  } else {
+  bool is_opus = !std::strcmp(extension, "opus");
+  struct gain_data gd_opus;
+  struct gain_data_strings gds_opus(&gd_opus);
+
+  // std::cerr << std::endl;
+
+  if (is_opus) {
+    TagLib::ByteVector header =
+        static_cast<TagLib::Ogg::Opus::File *>(p.first)->packet(0);
+    double opus_header_gain_current = header.toShort(16, false) / 256.0;
+
+    double opus_header_gain =
+        opus_header_gain_current +
+        (gd->album_mode ? gd->album_gain : gd->track_gain) - 5.0;
+    int16_t opus_header_gain_int = to_opus_gain(opus_header_gain);
+    double opus_correction_db =
+        opus_header_gain_current - opus_header_gain_int / 256.0;
+
+    gd_opus = *gd;
+    adjust_gain_data(&gd_opus, opus_correction_db);
+
+    int16_t opus_r128_album_gain_int = to_opus_gain(gd_opus.album_gain - 5.0);
+    int16_t opus_r128_track_gain_int = to_opus_gain(gd_opus.track_gain - 5.0);
+
+    // std::cerr << "ocg: "
+    //           << " 0x" << std::hex << std::setfill('0') << std::setw(4)
+    //           << header.toShort(16, false) << " (" << opus_header_gain_current
+    //           << ")" << std::endl;
+    // std::cerr << "ohg: "
+    //           << " 0x" << std::hex << std::setfill('0') << std::setw(4)
+    //           << opus_header_gain_int << " (" << opus_header_gain_int / 256.0
+    //           << ")" << std::endl;
+    // std::cerr << std::dec;
+    // std::cerr << "oag: " << opus_r128_album_gain_int << " "
+    //           << "(" << opus_r128_album_gain_int / 256.0 << ")" << std::endl;
+    // std::cerr << "otg: " << opus_r128_track_gain_int << " "
+    //           << "(" << opus_r128_track_gain_int / 256.0 << ")" << std::endl;
+
+    header[16] =
+        static_cast<char>(static_cast<uint16_t>(opus_header_gain_int) & 0xff);
+    header[17] =
+        static_cast<char>(static_cast<uint16_t>(opus_header_gain_int) >> 8);
+
+    static_cast<TagLib::Ogg::Opus::File *>(p.first)->setPacket(0, header);
+
+    p.second->addField("R128_TRACK_GAIN",
+                       std::to_string(opus_r128_track_gain_int));
+    if (gd->album_mode) {
+      p.second->addField("R128_ALBUM_GAIN",
+                         std::to_string(opus_r128_album_gain_int));
+    } else {
+      p.second->removeField("R128_ALBUM_GAIN");
+    }
+
+    clamp_gain_data(&gd_opus);
+    gds_opus = gain_data_strings(&gd_opus);
+
+    gd = &gd_opus;
+    gds = &gds_opus;
+  }
+
+  // std::cerr << "ag: " << gds->album_gain << std::endl;
+  // std::cerr << "ap: " << gds->album_peak << std::endl;
+  // std::cerr << "tg: " << gds->track_gain << std::endl;
+  // std::cerr << "tp: " << gds->track_peak << std::endl;
+
+  if (is_opus && !opus_compat) {
+    p.second->removeField("REPLAYGAIN_TRACK_GAIN");
+    p.second->removeField("REPLAYGAIN_TRACK_PEAK");
     p.second->removeField("REPLAYGAIN_ALBUM_GAIN");
     p.second->removeField("REPLAYGAIN_ALBUM_PEAK");
+  } else {
+    p.second->addField("REPLAYGAIN_TRACK_GAIN", gds->track_gain);
+    p.second->addField("REPLAYGAIN_TRACK_PEAK", gds->track_peak);
+    if (gd->album_mode) {
+      p.second->addField("REPLAYGAIN_ALBUM_GAIN", gds->album_gain);
+      p.second->addField("REPLAYGAIN_ALBUM_PEAK", gds->album_peak);
+    } else {
+      p.second->removeField("REPLAYGAIN_ALBUM_GAIN");
+      p.second->removeField("REPLAYGAIN_ALBUM_PEAK");
+    }
   }
+
   bool success = p.first->save();
   delete p.first;
   return !success;
 }
 
 static bool has_vorbis_comment(const char* filename,
-                               const char* extension) {
+                               const char* extension,
+                               bool opus_compat) {
   std::pair<TagLib::File*, TagLib::Ogg::XiphComment*> p
       = get_ogg_file(filename, extension);
 
   bool has_tag;
   TagLib::uint fieldCount = p.second->fieldCount();
+
+  bool is_opus = !std::strcmp(extension, "opus");
 
   TagLib::Ogg::FieldListMap const& flm = p.second->fieldListMap();
   if (flm.contains("REPLAYGAIN_ALBUM_PEAK")) {
@@ -265,6 +385,28 @@ static bool has_vorbis_comment(const char* filename,
   p.second->removeField("REPLAYGAIN_ALBUM_PEAK");
   p.second->removeField("REPLAYGAIN_TRACK_GAIN");
   p.second->removeField("REPLAYGAIN_TRACK_PEAK");
+
+  if (is_opus) {
+    if (p.second->fieldCount() < fieldCount) {
+      if (!opus_compat) {
+        /* If we see any of those tags above in 'non-legacy' opus mode, we need
+         * to remove them. Just rescan the file for now. */
+        has_tag = false;
+        goto end;
+      } else {
+        /* If we are in legacy opus mode, we need _both_ R128_* and REPLAYGAIN_*
+         * tags. So reset fieldCount so that the logic below works. */
+        fieldCount = p.second->fieldCount();
+      }
+    } else if (opus_compat) {
+      /* We need those tags in 'legacy' opus mode. Force a rescan. */
+      has_tag = false;
+      goto end;
+    }
+
+    p.second->removeField("R128_ALBUM_GAIN");
+    p.second->removeField("R128_TRACK_GAIN");
+  }
 
   has_tag = p.second->fieldCount() < fieldCount;
 end:
@@ -387,19 +529,23 @@ static bool has_tag_mp4(const char* filename) {
 
 int set_rg_info(const char* filename,
                 const char* extension,
-                struct gain_data* gd) {
+                struct gain_data* gd,
+                int opus_compat) {
+  if (std::strcmp(extension, "opus")) {
+    /* For opus, we clamp in tag_vorbis_comment(). */
+    clamp_gain_data(gd);
+  }
+
   struct gain_data_strings gds(gd);
 
   if (!std::strcmp(extension, "mp3") ||
       !std::strcmp(extension, "mp2")) {
     return tag_id3v2(filename, gd, &gds);
   } else if (!std::strcmp(extension, "flac") ||
-#ifdef HAS_OPUS_SUPPORT
              !std::strcmp(extension, "opus") ||
-#endif
              !std::strcmp(extension, "ogg") ||
              !std::strcmp(extension, "oga")) {
-    return tag_vorbis_comment(filename, extension, gd, &gds);
+    return tag_vorbis_comment(filename, extension, gd, &gds, !!opus_compat);
   } else if (!std::strcmp(extension, "mpc") ||
              !std::strcmp(extension, "wv")) {
     return tag_ape(filename, extension, gd, &gds);
@@ -410,17 +556,15 @@ int set_rg_info(const char* filename,
   return 1;
 }
 
-int has_rg_info(const char* filename, const char* extension) {
+int has_rg_info(const char* filename, const char* extension, int opus_compat) {
   if (!std::strcmp(extension, "mp3") ||
       !std::strcmp(extension, "mp2")) {
     return has_tag_id3v2(filename);
   } else if (!std::strcmp(extension, "flac") ||
-#ifdef HAS_OPUS_SUPPORT
              !std::strcmp(extension, "opus") ||
-#endif
              !std::strcmp(extension, "ogg") ||
              !std::strcmp(extension, "oga")) {
-    return has_vorbis_comment(filename, extension);
+    return has_vorbis_comment(filename, extension, !!opus_compat);
   // TODO: implement "0.0 workaround" for ape
   } else if (!std::strcmp(extension, "mpc") ||
              !std::strcmp(extension, "wv")) {

@@ -12,6 +12,18 @@ See also [loudness-scanner tool](https://github.com/jiixyj/loudness-scanner).
 News
 ----
 
+v1.2.4 released:
+ * Fix broken `ebur128_loudness_global_multiple()` function. Since v1.1.0 it
+   calculated the relative threshold just from the last state given to it,
+   resulting in wrong values.
+ * More tests
+ * Fix some minor build issues
+ * Fix uninitialized memory in `ebur128_init()`, possibly resulting in wrong
+   values
+
+v1.2.3 released:
+ * Fix uninitialized memory access during true peak scanning (bug #72)
+
 v1.2.2 released (v1.2.1 was mistagged):
  * Fix a null pointer dereference when doing true peak scanning of 192kHz data
 

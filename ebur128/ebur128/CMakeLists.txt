@@ -23,12 +23,14 @@ endif()
 
 
 set(EBUR128_VERSION_MAJOR 1)
-set(EBUR128_VERSION 1.2.2)
+set(EBUR128_VERSION 1.2.4)
 
 #### static
 if(BUILD_STATIC_LIBS)
   add_library(ebur128_static STATIC ebur128.c)
-  set_property(TARGET ebur128_static PROPERTY OUTPUT_NAME ebur128)
+  if(NOT MSVC)
+    set_property(TARGET ebur128_static PROPERTY OUTPUT_NAME ebur128)
+  endif()
 endif()
 
 if(WITH_STATIC_PIC)
@@ -47,8 +49,9 @@ set_target_properties(ebur128 PROPERTIES
     SOVERSION ${EBUR128_VERSION_MAJOR}
     VERSION ${EBUR128_VERSION})
 
-if(UNIX)
-  target_link_libraries(ebur128 m)
+find_library(MATH_LIBRARY m)
+if(MATH_LIBRARY)
+  target_link_libraries(ebur128 ${MATH_LIBRARY})
 endif()
 
 set(EBUR128_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE INTERNAL "")
@@ -59,3 +62,9 @@ if(BUILD_STATIC_LIBS)
 else()
   install(TARGETS ebur128 DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
+
+#### pkg-config
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/libebur128.pc.cmake
+               ${CMAKE_CURRENT_BINARY_DIR}/libebur128.pc @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/libebur128.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
