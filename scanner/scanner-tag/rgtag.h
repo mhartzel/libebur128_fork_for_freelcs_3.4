@@ -3,35 +3,43 @@
 #ifndef RGTAG_H_
 #define RGTAG_H_
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct gain_data {
-  double track_gain;
-  double track_peak;
-  int album_mode;
-  double album_gain;
-  double album_peak;
+	double track_gain;
+	double track_peak;
+	int album_mode;
+	double album_gain;
+	double album_peak;
 };
 
-void clamp_gain_data(struct gain_data* gd);
+typedef enum {
+	OPUS_GAIN_REFERENCE_ABSOLUTE,
+	OPUS_GAIN_REFERENCE_R128,
+} OpusGainReference;
 
-int set_rg_info(const char* filename,
-                const char* extension,
-                struct gain_data* gd,
-                int opus_compat);
+typedef struct {
+	bool vorbisgain_compat;
+	OpusGainReference opus_gain_reference;
+	double offset;
+	bool is_track;
+} OpusTagInfo;
 
-int has_rg_info(const char* filename,
-                const char* extension,
-                int opus_compat);
+double clamp_rg(double x);
+void clamp_gain_data(struct gain_data *gd);
 
-void adjust_with_file_gain(struct gain_data* gd,
-                           const char* filename,
-                           const char* extension);
+int set_rg_info(char const *filename, char const *extension,
+    struct gain_data *gd, OpusTagInfo const *opus_tag_info);
+
+bool has_rg_info(char const *filename, char const *extension,
+    OpusTagInfo const *opus_tag_info);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* RGTAG_H_ */
+#endif /* RGTAG_H_ */
